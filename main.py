@@ -30,6 +30,37 @@ WELCOME_MESSAGE = (
 
 REQUEST_RECEIVED = "حسناً صديقنا…تم ارسال طلبك للمشرفين وسوف يتم الرد باسرع وقت 😇"
 
+COMMANDS_USER = (
+    "📋 *الأوامر المتاحة:*\n\n"
+    "▪️ الاوامر — عرض هذه القائمة\n"
+    "▪️ /start — بدء المحادثة\n"
+    "▪️ /myid — معرفة رقمك"
+)
+
+COMMANDS_ADMIN = (
+    "📋 *أوامر المشرف:*\n\n"
+    "▪️ /admins — قائمة المشرفين\n"
+    "▪️ /settings — إعدادات البوت\n"
+    "▪️ /myid — معرفة رقمك\n"
+    "▪️ الاوامر — عرض هذه القائمة"
+)
+
+COMMANDS_OWNER = (
+    "📋 *أوامر المالك:*\n\n"
+    "🔧 *إعداد المجموعة:*\n"
+    "▪️ /setgroup — سجّل المجموعة (أرسله داخل المجموعة)\n\n"
+    "👥 *إدارة المشرفين:*\n"
+    "▪️ /addadmin <رقم> — أضف مشرفاً\n"
+    "▪️ /removeadmin <رقم> — احذف مشرفاً\n"
+    "▪️ /admins — قائمة المشرفين\n\n"
+    "⚙️ *عام:*\n"
+    "▪️ /settings — إعدادات البوت\n"
+    "▪️ /myid — معرفة رقمك\n"
+    "▪️ الاوامر — عرض هذه القائمة"
+)
+
+ARABIC_COMMANDS_FILTER = filters.Regex(r"^(الاوامر|الأوامر|اوامر|أوامر)$")
+
 
 def load_settings() -> dict:
     if SETTINGS_FILE.exists():
@@ -92,32 +123,24 @@ def save_topic_mapping(user_id: int, topic_id: int) -> None:
     save_settings(settings)
 
 
+def build_commands_text(chat_id: int) -> str:
+    if is_owner(chat_id):
+        return COMMANDS_OWNER
+    elif is_admin(chat_id):
+        return COMMANDS_ADMIN
+    else:
+        return COMMANDS_USER
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(WELCOME_MESSAGE)
 
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def commands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     sender = update.effective_chat.id
-    if is_owner(sender):
-        text = (
-            "📋 أوامر المالك:\n\n"
-            "/setgroup — سجّل المجموعة (أرسله داخل المجموعة)\n"
-            "/addadmin <id> — أضف مشرفاً\n"
-            "/removeadmin <id> — احذف مشرفاً\n"
-            "/admins — قائمة المشرفين\n"
-            "/settings — إعدادات البوت\n"
-            "/myid — معرفة رقمك\n"
-        )
-    elif is_admin(sender):
-        text = (
-            "📋 أوامر المشرف:\n\n"
-            "/admins — قائمة المشرفين\n"
-            "/settings — إعدادات البوت\n"
-            "/myid — معرفة رقمك\n"
-        )
-    else:
-        text = "📋 قائمة الأوامر:\n\n/start - بدء المحادثة\n/help - المساعدة\n/myid - معرفة رقمك"
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        build_commands_text(sender), parse_mode="Markdown"
+    )
 
 
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -247,13 +270,20 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     group_text = f"`{group_id}`" if group_id else "❌ غير مضبوطة"
     text = (
-        "⚙️ إعدادات البوت:\n\n"
+        "⚙️ *إعدادات البوت:*\n\n"
         f"📦 المجموعة: {group_text}\n"
         f"👥 عدد المستخدمين: {user_count}\n"
         f"🛡 عدد المشرفين: {admins_count}\n"
         f"👑 المالك: `{OWNER_CHAT_ID}`"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def handle_arabic_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    sender = update.effective_chat.id
+    await update.message.reply_text(
+        build_commands_text(sender), parse_mode="Markdown"
+    )
 
 
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -375,13 +405,20 @@ def main() -> None:
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("help", commands_cmd))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("setgroup", setgroup_cmd))
     app.add_handler(CommandHandler("addadmin", addadmin_cmd))
     app.add_handler(CommandHandler("removeadmin", removeadmin_cmd))
     app.add_handler(CommandHandler("admins", admins_cmd))
     app.add_handler(CommandHandler("settings", settings_cmd))
+
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & ARABIC_COMMANDS_FILTER,
+            handle_arabic_commands,
+        )
+    )
 
     app.add_handler(
         MessageHandler(
