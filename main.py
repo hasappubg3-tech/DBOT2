@@ -355,7 +355,12 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             topic_id = topic.message_thread_id
             save_topic_mapping(chat_id, topic_id)
+            logger.info(f"Created topic {topic_id} for user {chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to create topic for user {chat_id}: {e}")
+            return
 
+        try:
             await context.bot.send_message(
                 chat_id=group_id,
                 message_thread_id=topic_id,
@@ -366,12 +371,14 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 ),
                 parse_mode="Markdown",
             )
-
-            await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=topic_id)
-            logger.info(f"Created topic {topic_id} and forwarded first message for user {chat_id}")
         except Exception as e:
-            logger.error(f"Failed to create topic for user {chat_id}: {e}")
-            return
+            logger.error(f"Failed to send user info to topic {topic_id}: {e}")
+
+        try:
+            await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=topic_id)
+            logger.info(f"Forwarded first message from user {chat_id} to topic {topic_id}")
+        except Exception as e:
+            logger.error(f"Failed to forward first message for user {chat_id}: {e}")
 
         await msg.reply_text(REQUEST_RECEIVED)
         mark_user_notified(chat_id)
