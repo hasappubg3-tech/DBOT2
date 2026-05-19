@@ -137,21 +137,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def commands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sender = update.effective_chat.id
+    sender = update.effective_user.id if update.effective_user else update.effective_chat.id
     await update.message.reply_text(
         build_commands_text(sender), parse_mode="Markdown"
     )
 
 
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(f"🆔 رقمك: `{chat_id}`", parse_mode="Markdown")
+    user_id = update.effective_user.id if update.effective_user else update.effective_chat.id
+    await update.message.reply_text(f"🆔 رقمك: `{user_id}`", parse_mode="Markdown")
 
 
 async def setgroup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sender = update.effective_chat.id
+    sender = update.effective_user.id if update.effective_user else None
 
-    if not is_owner(sender):
+    if not sender or not is_owner(sender):
         await update.message.reply_text(
             f"⛔️ ليس لديك صلاحية لهذا الأمر.\n"
             f"معرّفك: `{sender}`",
@@ -193,8 +193,8 @@ async def setgroup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def addadmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sender = update.effective_chat.id
-    if not is_owner(sender):
+    sender = update.effective_user.id if update.effective_user else None
+    if not sender or not is_owner(sender):
         return
 
     if not context.args:
@@ -224,8 +224,8 @@ async def addadmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def removeadmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sender = update.effective_chat.id
-    if not is_owner(sender):
+    sender = update.effective_user.id if update.effective_user else None
+    if not sender or not is_owner(sender):
         return
 
     if not context.args:
@@ -251,8 +251,8 @@ async def removeadmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def admins_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sender = update.effective_chat.id
-    if not is_admin(sender):
+    sender = update.effective_user.id if update.effective_user else None
+    if not sender or not is_admin(sender):
         return
 
     admins = get_admins()
@@ -265,8 +265,8 @@ async def admins_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sender = update.effective_chat.id
-    if not is_admin(sender):
+    sender = update.effective_user.id if update.effective_user else None
+    if not sender or not is_admin(sender):
         return
 
     group_id = get_group_id()
@@ -285,7 +285,7 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_arabic_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    sender = update.effective_chat.id
+    sender = update.effective_user.id if update.effective_user else update.effective_chat.id
     await update.message.reply_text(
         build_commands_text(sender), parse_mode="Markdown"
     )
