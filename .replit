@@ -44,3 +44,4 @@ args = "python main.py"
 [userenv]
 
 [userenv.shared]
+OWNER_CHAT_ID = "1003939822013"
