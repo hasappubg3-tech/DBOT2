@@ -131,7 +131,7 @@ def should_notify_user(user_id: int) -> bool:
     last = settings.get("last_notified", {}).get(str(user_id))
     if last is None:
         return True
-    return (time.time() - last) >= 86400
+    return (time.time() - last) >= 7200
 
 
 def mark_user_notified(user_id: int) -> None:
