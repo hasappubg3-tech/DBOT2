@@ -1,6 +1,6 @@
 import os
 import logging
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,23 +16,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-OWNER_CHAT_ID = int(os.environ.get("OWNER_CHAT_ID", "7305367169"))
+GROUP_CHAT_ID = int(os.environ.get("GROUP_CHAT_ID", "0"))
 
-FIXED_REPLY = (
+user_topic_map: dict[int, int] = {}
+topic_user_map: dict[int, int] = {}
+
+WELCOME_MESSAGE = (
     "أهلا صديقنا 😊\n\n"
     "اكتب طلبك هنا (اي ملزمة او ملخص او ملف معين تريد ينضاف للبوت)\n"
     "وراح يتم اضافته ان شاء الله 😇"
 )
 
-MESSAGE_REPLY = "حسناً صديقنا…تم ارسال طلبك للمشرفين وسوف يتم الرد باسرع وقت 😇"
-
-reply_map: dict[int, int] = {}
-greeted_users: set[int] = set()
-pending_target_chat_id: int | None = None
+REQUEST_RECEIVED = "حسناً صديقنا…تم ارسال طلبك للمشرفين وسوف يتم الرد باسرع وقت 😇"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(FIXED_REPLY)
+    await update.message.reply_text(WELCOME_MESSAGE)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -46,131 +45,123 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"🆔 رقمك: `{chat_id}`", parse_mode="Markdown")
 
 
-async def to_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global pending_target_chat_id
-    sender_id = update.effective_chat.id
-
-    if sender_id != OWNER_CHAT_ID:
-        logger.warning(f"Unauthorized /to attempt from chat_id={sender_id} (OWNER_CHAT_ID={OWNER_CHAT_ID})")
-        return
-
-    if not context.args:
-        await update.message.reply_text("⚠️ استخدم: /to CHATID")
-        return
-
-    try:
-        target_id = int(context.args[0])
-        pending_target_chat_id = target_id
-        await update.message.reply_text(
-            f"✅ تم تحديد المستخدم ({target_id}) كهدف\n\n"
-            "أرسل أو حوّل الآن أي ملف أو رسالة وسيوصلها البوت للمستخدم تلقائياً.\n\n"
-            "إلغاء الهدف: /cancel"
-        )
-        logger.info(f"Pending target set to {target_id}")
-    except ValueError:
-        await update.message.reply_text("⚠️ الرقم غير صحيح")
-
-
-async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global pending_target_chat_id
-    if update.effective_chat.id != OWNER_CHAT_ID:
-        return
-    pending_target_chat_id = None
-    await update.message.reply_text("❌ تم إلغاء تحديد المستخدم")
-    logger.info("Pending target cleared")
-
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global pending_target_chat_id
-
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
     if not msg:
         return
 
+    user = update.effective_user
     chat_id = update.effective_chat.id
 
-    if chat_id == OWNER_CHAT_ID:
-        if pending_target_chat_id is not None:
-            target_id = pending_target_chat_id
-            pending_target_chat_id = None
-            try:
-                await context.bot.copy_message(
-                    chat_id=target_id,
-                    from_chat_id=OWNER_CHAT_ID,
-                    message_id=msg.message_id,
-                )
-                await msg.reply_text(f"✅ تم إرسال الرسالة للمستخدم ({target_id})")
-                logger.info(f"Message sent to user {target_id} via /to")
-            except Exception as e:
-                logger.error(f"copy_message failed for user {target_id}: {e}")
-                try:
-                    await context.bot.forward_message(
-                        chat_id=target_id,
-                        from_chat_id=OWNER_CHAT_ID,
-                        message_id=msg.message_id,
-                    )
-                    await msg.reply_text(f"✅ تم إرسال الرسالة للمستخدم ({target_id})")
-                    logger.info(f"Message forwarded to user {target_id} via fallback")
-                except Exception as e2:
-                    await msg.reply_text(
-                        f"❌ فشل الإرسال للمستخدم ({target_id})\n"
-                        f"السبب: {e2}"
-                    )
-                    logger.error(f"forward_message also failed for user {target_id}: {e2}")
-            return
-
-        if msg.reply_to_message:
-            reply_to_id = msg.reply_to_message.message_id
-            if reply_to_id in reply_map:
-                target_chat_id = reply_map[reply_to_id]
-                try:
-                    await context.bot.copy_message(
-                        chat_id=target_chat_id,
-                        from_chat_id=OWNER_CHAT_ID,
-                        message_id=msg.message_id,
-                    )
-                    await msg.reply_text("✅ تم إرسال الرد للمستخدم")
-                    logger.info(f"Reply sent to user {target_chat_id}")
-                except Exception as e:
-                    await msg.reply_text(f"❌ فشل الإرسال للمستخدم\nالسبب: {e}")
-                    logger.error(f"Failed to send reply to {target_chat_id}: {e}")
+    if GROUP_CHAT_ID == 0:
+        logger.error("GROUP_CHAT_ID is not set!")
         return
 
-    if chat_id not in greeted_users:
-        await msg.reply_text(MESSAGE_REPLY)
-        greeted_users.add(chat_id)
+    if chat_id not in user_topic_map:
+        user_name = user.full_name if user else "مجهول"
+        username_part = f" (@{user.username})" if user and user.username else ""
+        topic_name = f"{user_name}{username_part}"
 
-    forwarded = await context.bot.forward_message(
-        chat_id=OWNER_CHAT_ID,
-        from_chat_id=chat_id,
-        message_id=msg.message_id,
-    )
-    reply_map[forwarded.message_id] = chat_id
+        try:
+            topic = await context.bot.create_forum_topic(
+                chat_id=GROUP_CHAT_ID,
+                name=topic_name,
+            )
+            topic_id = topic.message_thread_id
+            user_topic_map[chat_id] = topic_id
+            topic_user_map[topic_id] = chat_id
 
-    sender_name = update.effective_user.first_name if update.effective_user else "مجهول"
-    await context.bot.send_message(
-        chat_id=OWNER_CHAT_ID,
-        text=f"👆 لإرسال ملف لهذا المستخدم ({sender_name}):\n`/to {chat_id}`",
-        parse_mode="Markdown",
-    )
-    logger.info(f"Forwarded message from user {chat_id} to owner")
+            await context.bot.send_message(
+                chat_id=GROUP_CHAT_ID,
+                message_thread_id=topic_id,
+                text=(
+                    f"👤 مستخدم جديد\n"
+                    f"الاسم: {user_name}{username_part}\n"
+                    f"الرقم: `{chat_id}`"
+                ),
+                parse_mode="Markdown",
+            )
+            logger.info(f"Created topic {topic_id} for user {chat_id} ({topic_name})")
+        except Exception as e:
+            logger.error(f"Failed to create topic for user {chat_id}: {e}")
+            return
+
+        await msg.reply_text(REQUEST_RECEIVED)
+
+    topic_id = user_topic_map[chat_id]
+
+    try:
+        await context.bot.copy_message(
+            chat_id=GROUP_CHAT_ID,
+            message_thread_id=topic_id,
+            from_chat_id=chat_id,
+            message_id=msg.message_id,
+        )
+        logger.info(f"Copied message from user {chat_id} to topic {topic_id}")
+    except Exception as e:
+        logger.error(f"Failed to forward message from user {chat_id} to topic {topic_id}: {e}")
+
+
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    if not msg.message_thread_id:
+        return
+
+    if msg.from_user and msg.from_user.is_bot:
+        return
+
+    topic_id = msg.message_thread_id
+
+    if topic_id not in topic_user_map:
+        logger.warning(f"No user mapped to topic {topic_id}, ignoring.")
+        return
+
+    target_user_id = topic_user_map[topic_id]
+
+    try:
+        await context.bot.copy_message(
+            chat_id=target_user_id,
+            from_chat_id=GROUP_CHAT_ID,
+            message_id=msg.message_id,
+        )
+        logger.info(f"Sent reply from topic {topic_id} to user {target_user_id}")
+    except Exception as e:
+        logger.error(f"Failed to send reply to user {target_user_id}: {e}")
+        try:
+            await msg.reply_text(f"❌ فشل الإرسال للمستخدم\nالسبب: {e}")
+        except Exception:
+            pass
 
 
 def main() -> None:
     if not TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN is not set")
+    if GROUP_CHAT_ID == 0:
+        raise ValueError("GROUP_CHAT_ID is not set — please set it in environment variables")
 
-    logger.info(f"Bot starting. OWNER_CHAT_ID={OWNER_CHAT_ID}")
+    logger.info(f"Bot starting. GROUP_CHAT_ID={GROUP_CHAT_ID}")
 
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("myid", myid))
-    app.add_handler(CommandHandler("to", to_cmd))
-    app.add_handler(CommandHandler("cancel", cancel_cmd))
+
     app.add_handler(
-        MessageHandler(filters.ALL & ~filters.COMMAND, handle_message)
+        MessageHandler(
+            filters.ChatType.PRIVATE & ~filters.COMMAND,
+            handle_user_message,
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.Chat(GROUP_CHAT_ID) & ~filters.COMMAND,
+            handle_group_message,
+        )
     )
 
     logger.info("Bot started with polling...")
