@@ -587,12 +587,12 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     async with get_topic_lock(chat_id):
+        user_name = user.full_name if user else "مجهول"
+        username_part = f" (@{user.username})" if user and user.username else ""
         user_topic_map = get_user_topic_map()
 
+        # ── حالة: لا يوجد تبويب (أول مراسلة) ──
         if chat_id not in user_topic_map:
-            user_name = user.full_name if user else "مجهول"
-            username_part = f" (@{user.username})" if user and user.username else ""
-
             try:
                 topic = await context.bot.create_forum_topic(chat_id=group_id, name=user_name)
                 topic_id = topic.message_thread_id
@@ -626,51 +626,52 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             mark_user_notified(chat_id)
             return
 
-    topic_id = get_user_topic_map()[chat_id]
-
-    try:
-        await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=topic_id)
-        logger.info(f"Forwarded message from user {chat_id} to topic {topic_id}")
-    except Exception as e:
-        logger.warning(f"Failed to forward to topic {topic_id} for user {chat_id}: {e}. Recreating...")
-        settings["user_topic_map"].pop(str(chat_id), None)
-        settings["topic_user_map"].pop(str(topic_id), None)
-        save_settings(settings)
-
-        user_name = user.full_name if user else "مجهول"
-        username_part = f" (@{user.username})" if user and user.username else ""
+        # ── حالة: يوجد تبويب — حاول الإرسال، وإلا أعد إنشاءه ──
+        topic_id = user_topic_map[chat_id]
+        forward_ok = False
         try:
-            new_topic = await context.bot.create_forum_topic(chat_id=group_id, name=user_name)
-            new_topic_id = new_topic.message_thread_id
-            save_topic_mapping(chat_id, new_topic_id)
-            logger.info(f"Recreated topic {new_topic_id} for user {chat_id}")
-        except Exception as te:
-            logger.error(f"Failed to recreate topic for user {chat_id}: {te}")
-            return
+            await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=topic_id)
+            logger.info(f"Forwarded message from user {chat_id} to topic {topic_id}")
+            forward_ok = True
+        except Exception as e:
+            logger.warning(f"Topic {topic_id} unavailable for user {chat_id}: {e}. Recreating...")
+            settings["user_topic_map"].pop(str(chat_id), None)
+            settings["topic_user_map"].pop(str(topic_id), None)
+            save_settings(settings)
 
-        try:
-            await context.bot.send_message(
-                chat_id=group_id,
-                message_thread_id=new_topic_id,
-                text=(
-                    f"👤 مستخدم (تبويب جديد)\n"
-                    f"الاسم: {user_name}{username_part}\n"
-                    f"الرقم: `{chat_id}`"
-                ),
-                parse_mode="Markdown",
-            )
-        except Exception as ie:
-            logger.error(f"Failed to send user info to new topic: {ie}")
+            try:
+                new_topic = await context.bot.create_forum_topic(chat_id=group_id, name=user_name)
+                new_topic_id = new_topic.message_thread_id
+                save_topic_mapping(chat_id, new_topic_id)
+                logger.info(f"Recreated topic {new_topic_id} for user {chat_id}")
+            except Exception as te:
+                logger.error(f"Failed to recreate topic for user {chat_id}: {te}")
+                return
 
-        try:
-            await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=new_topic_id)
-            logger.info(f"Forwarded message to new topic {new_topic_id} for user {chat_id}")
-        except Exception as fe:
-            logger.error(f"Failed to forward to new topic {new_topic_id}: {fe}")
+            try:
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    message_thread_id=new_topic_id,
+                    text=(
+                        f"👤 مستخدم (تبويب جديد)\n"
+                        f"الاسم: {user_name}{username_part}\n"
+                        f"الرقم: `{chat_id}`"
+                    ),
+                    parse_mode="Markdown",
+                )
+            except Exception as ie:
+                logger.error(f"Failed to send user info to new topic: {ie}")
 
-    if should_notify_user(chat_id):
-        await msg.reply_text(get_request_received())
-        mark_user_notified(chat_id)
+            try:
+                await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=new_topic_id)
+                logger.info(f"Forwarded message to new topic {new_topic_id} for user {chat_id}")
+                forward_ok = True
+            except Exception as fe:
+                logger.error(f"Failed to forward to new topic {new_topic_id}: {fe}")
+
+        if forward_ok and should_notify_user(chat_id):
+            await msg.reply_text(get_request_received())
+            mark_user_notified(chat_id)
 
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
