@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import time
+import asyncio
 from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Forbidden
@@ -61,6 +62,36 @@ COMMANDS_OWNER = (
 ARABIC_COMMANDS_FILTER = filters.Regex(r"^(الاوامر|الأوامر|اوامر|أوامر)$")
 
 owner_state: dict[int, str] = {}
+_topic_locks: dict[int, asyncio.Lock] = {}
+_group_admin_cache: dict[int, tuple[bool, float]] = {}
+_GROUP_ADMIN_CACHE_TTL = 300
+
+
+def get_topic_lock(user_id: int) -> asyncio.Lock:
+    if user_id not in _topic_locks:
+        _topic_locks[user_id] = asyncio.Lock()
+    return _topic_locks[user_id]
+
+
+async def is_group_admin(context, user_id: int) -> bool:
+    group_id = get_group_id()
+    if not group_id:
+        return False
+    now = time.time()
+    cached = _group_admin_cache.get(user_id)
+    if cached and (now - cached[1]) < _GROUP_ADMIN_CACHE_TTL:
+        return cached[0]
+    try:
+        member = await context.bot.get_chat_member(group_id, user_id)
+        result = member.status in ("administrator", "creator")
+    except Exception:
+        result = False
+    _group_admin_cache[user_id] = (result, now)
+    return result
+
+
+async def is_effective_admin(context, user_id: int) -> bool:
+    return is_admin(user_id) or await is_group_admin(context, user_id)
 
 
 # ── Settings load/save ────────────────────────────────────────────────────────
@@ -331,7 +362,7 @@ async def setgroup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def admins_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     sender = update.effective_user.id if update.effective_user else None
-    if not sender or not is_admin(sender):
+    if not sender or not await is_effective_admin(context, sender):
         return
     admins = get_admins()
     if not admins:
@@ -343,7 +374,7 @@ async def admins_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     sender = update.effective_user.id if update.effective_user else None
-    if not sender or not is_admin(sender):
+    if not sender or not await is_effective_admin(context, sender):
         return
     if is_owner(sender) and update.effective_chat.type == "private":
         await send_settings_panel(update.message)
@@ -555,46 +586,47 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not group_id:
         return
 
-    user_topic_map = get_user_topic_map()
+    async with get_topic_lock(chat_id):
+        user_topic_map = get_user_topic_map()
 
-    if chat_id not in user_topic_map:
-        user_name = user.full_name if user else "مجهول"
-        username_part = f" (@{user.username})" if user and user.username else ""
+        if chat_id not in user_topic_map:
+            user_name = user.full_name if user else "مجهول"
+            username_part = f" (@{user.username})" if user and user.username else ""
 
-        try:
-            topic = await context.bot.create_forum_topic(chat_id=group_id, name=user_name)
-            topic_id = topic.message_thread_id
-            save_topic_mapping(chat_id, topic_id)
-            logger.info(f"Created topic {topic_id} for user {chat_id}")
-        except Exception as e:
-            logger.error(f"Failed to create topic for user {chat_id}: {e}")
+            try:
+                topic = await context.bot.create_forum_topic(chat_id=group_id, name=user_name)
+                topic_id = topic.message_thread_id
+                save_topic_mapping(chat_id, topic_id)
+                logger.info(f"Created topic {topic_id} for user {chat_id}")
+            except Exception as e:
+                logger.error(f"Failed to create topic for user {chat_id}: {e}")
+                return
+
+            try:
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    message_thread_id=topic_id,
+                    text=(
+                        f"👤 مستخدم جديد\n"
+                        f"الاسم: {user_name}{username_part}\n"
+                        f"الرقم: `{chat_id}`"
+                    ),
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                logger.error(f"Failed to send user info to topic {topic_id}: {e}")
+
+            try:
+                await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=topic_id)
+                logger.info(f"Forwarded first message from user {chat_id} to topic {topic_id}")
+            except Exception as e:
+                logger.error(f"Failed to forward first message for user {chat_id}: {e}")
+
+            await msg.reply_text(get_request_received())
+            mark_user_notified(chat_id)
             return
 
-        try:
-            await context.bot.send_message(
-                chat_id=group_id,
-                message_thread_id=topic_id,
-                text=(
-                    f"👤 مستخدم جديد\n"
-                    f"الاسم: {user_name}{username_part}\n"
-                    f"الرقم: `{chat_id}`"
-                ),
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.error(f"Failed to send user info to topic {topic_id}: {e}")
-
-        try:
-            await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=topic_id)
-            logger.info(f"Forwarded first message from user {chat_id} to topic {topic_id}")
-        except Exception as e:
-            logger.error(f"Failed to forward first message for user {chat_id}: {e}")
-
-        await msg.reply_text(get_request_received())
-        mark_user_notified(chat_id)
-        return
-
-    topic_id = user_topic_map[chat_id]
+    topic_id = get_user_topic_map()[chat_id]
 
     try:
         await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=topic_id)
@@ -656,7 +688,10 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if msg.from_user and msg.from_user.is_bot:
         return
 
-    if msg.from_user and msg.from_user.username:
+    if not msg.from_user or not await is_group_admin(context, msg.from_user.id):
+        return
+
+    if msg.from_user.username:
         track_username(msg.from_user.id, msg.from_user.username)
 
     topic_id = msg.message_thread_id
