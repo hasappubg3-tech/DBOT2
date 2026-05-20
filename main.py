@@ -390,8 +390,41 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=topic_id)
         logger.info(f"Forwarded message from user {chat_id} to topic {topic_id}")
     except Exception as e:
-        logger.error(f"Failed to forward message from user {chat_id} to topic {topic_id}: {e}")
-        return
+        logger.warning(f"Failed to forward to topic {topic_id} for user {chat_id}: {e}. Recreating topic...")
+        settings["user_topic_map"].pop(str(chat_id), None)
+        settings["topic_user_map"].pop(str(topic_id), None)
+        save_settings(settings)
+
+        user_name = user.full_name if user else "مجهول"
+        username_part = f" (@{user.username})" if user and user.username else ""
+        try:
+            new_topic = await context.bot.create_forum_topic(chat_id=group_id, name=user_name)
+            new_topic_id = new_topic.message_thread_id
+            save_topic_mapping(chat_id, new_topic_id)
+            logger.info(f"Recreated topic {new_topic_id} for user {chat_id}")
+        except Exception as te:
+            logger.error(f"Failed to recreate topic for user {chat_id}: {te}")
+            return
+
+        try:
+            await context.bot.send_message(
+                chat_id=group_id,
+                message_thread_id=new_topic_id,
+                text=(
+                    f"👤 مستخدم (تبويب جديد)\n"
+                    f"الاسم: {user_name}{username_part}\n"
+                    f"الرقم: `{chat_id}`"
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception as ie:
+            logger.error(f"Failed to send user info to new topic: {ie}")
+
+        try:
+            await forward_or_copy(context, chat_id, group_id, msg.message_id, thread_id=new_topic_id)
+            logger.info(f"Forwarded message to new topic {new_topic_id} for user {chat_id}")
+        except Exception as fe:
+            logger.error(f"Failed to forward to new topic {new_topic_id}: {fe}")
 
     if should_notify_user(chat_id):
         await msg.reply_text(REQUEST_RECEIVED)
@@ -424,6 +457,10 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         await forward_or_copy(context, group_id, target_user_id, msg.message_id)
         logger.info(f"Sent reply from topic {topic_id} to user {target_user_id}")
+        try:
+            await msg.reply_text("•")
+        except Exception:
+            pass
     except Forbidden as e:
         logger.error(f"User {target_user_id} blocked the bot: {e}")
         try:
